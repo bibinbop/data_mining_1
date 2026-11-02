@@ -43,7 +43,7 @@ class CustomKMeans:
 
     @staticmethod
     def _init_centroids(X: np.ndarray, k: int, rng: np.random.RandomState) -> np.ndarray:
-        """K-Means++ initialisation for better starting centroids."""
+        """K-Means++ initialisation with incremental distance tracking."""
         n_samples, n_features = X.shape
         centroids = np.empty((k, n_features), dtype=X.dtype)
 
@@ -51,15 +51,23 @@ class CustomKMeans:
         idx = rng.randint(0, n_samples)
         centroids[0] = X[idx]
 
+        # Running minimum squared distance to any selected centroid
+        diff = X - centroids[0]
+        min_dists_sq = np.sum(diff ** 2, axis=1)
+
         for c in range(1, k):
-            # Squared distances to nearest existing centroid
-            dists = np.min(
-                np.sum((X[:, np.newaxis, :] - centroids[np.newaxis, :c, :]) ** 2, axis=2),
-                axis=1,
-            )
-            probs = dists / dists.sum()
+            total_dist = min_dists_sq.sum()
+            if total_dist <= 0:
+                probs = np.full(n_samples, 1.0 / n_samples)
+            else:
+                probs = min_dists_sq / total_dist
             idx = rng.choice(n_samples, p=probs)
             centroids[c] = X[idx]
+
+            if c < k - 1:
+                new_diff = X - centroids[c]
+                new_dists_sq = np.sum(new_diff ** 2, axis=1)
+                min_dists_sq = np.minimum(min_dists_sq, new_dists_sq)
 
         return centroids
 
@@ -70,9 +78,9 @@ class CustomKMeans:
         """Assign each sample to the nearest centroid (Euclidean)."""
         # Vectorised distance computation using the expansion:
         # ||x - c||^2 = ||x||^2 - 2 x·c + ||c||^2
-        X_sq = np.sum(X ** 2, axis=1, keepdims=True)       # (n, 1)
-        C_sq = np.sum(centroids ** 2, axis=1, keepdims=True)  # (k, 1)
-        dist_sq = X_sq - 2 * X @ centroids.T + C_sq.T       # (n, k)
+        X_sq = np.sum(X ** 2, axis=1, keepdims=True)          # (n, 1)
+        C_sq = np.sum(centroids ** 2, axis=1, keepdims=True)     # (k, 1)
+        dist_sq = X_sq - 2.0 * (X @ centroids.T) + C_sq.T       # (n, k)
         return np.argmin(dist_sq, axis=1)
 
     # ── Stage 3: Update ──────────────────────────────────────────────────
@@ -122,10 +130,10 @@ class CustomKMeans:
 
             # Recompute final labels & inertia
             labels = self._assign_labels(X, centroids)
-            inertia = sum(
+            inertia = float(sum(
                 np.sum((X[labels == c] - centroids[c]) ** 2)
                 for c in range(self.n_clusters)
-            )
+            ))
 
             if inertia < best_inertia:
                 best_inertia = inertia
@@ -134,10 +142,9 @@ class CustomKMeans:
 
         self.centroids = best_centroids
         self.labels = best_labels
-        self.inertia = best_inertia
+        self.inertia = float(best_inertia)
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         """Assign new data to closest learned centroid."""
         return self._assign_labels(X, self.centroids)
-
